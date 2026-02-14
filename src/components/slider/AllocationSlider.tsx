@@ -47,6 +47,16 @@ export function AllocationSlider(props: Props) {
 
   const handleCount = Math.max(0, boundaries.length - 1);
 
+  const lockedHandles = useMemo(() => {
+    return Array.from({ length: handleCount }, (_, i) => {
+      const leftKey = boundaries[i]?.key;
+      const rightKey = boundaries[i + 1]?.key;
+      const left = segments.find((s) => s.key === leftKey);
+      const right = segments.find((s) => s.key === rightKey);
+      return Boolean(left?.isLocked || right?.isLocked);
+    });
+  }, [boundaries, handleCount, segments]);
+
   const onPointerDown = (handleIndex: number) => (e: React.PointerEvent) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     setDragHandleIndex(handleIndex);
@@ -113,17 +123,18 @@ export function AllocationSlider(props: Props) {
         {Array.from({ length: handleCount }).map((_, i) => {
           const boundary = boundaries[i]!;
           const pct = props.totalCents <= 0 ? 0 : (boundary.endCents / props.totalCents) * 100;
+          const isLocked = lockedHandles[i] ?? false;
           return (
             <div
               key={i}
-              onPointerDown={onPointerDown(i)}
+              onPointerDown={isLocked ? undefined : onPointerDown(i)}
               className={[
-                "absolute top-0 h-full w-2 cursor-ew-resize",
-                "bg-white/70 hover:bg-white",
+                "absolute top-0 h-full w-2",
+                isLocked ? "cursor-not-allowed bg-white/40" : "cursor-ew-resize bg-white/70 hover:bg-white",
                 "border-l border-r border-slate-300",
               ].join(" ")}
               style={{ left: `calc(${pct}% - 4px)` }}
-              title="Drag to reallocate"
+              title={isLocked ? "Fixed boundary" : "Drag to reallocate"}
             />
           );
         })}

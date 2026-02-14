@@ -12,23 +12,45 @@ export class DebtAmortizationManager {
     const monthsMax = Math.max(0, Math.round(horizonYears * 12));
     const monthlyRate = this.annualToMonthly(debt.annualApr.toDecimal());
 
+    const timelineStartIso = DateMonthMath.currentMonthIso();
+    const startIso =
+      debt.startDateIso && debt.startDateIso.length > 0 ? debt.startDateIso : timelineStartIso;
+    let startOffset = 0;
+    try {
+      startOffset = DateMonthMath.monthsBetweenIso(timelineStartIso, startIso);
+    } catch {
+      startOffset = 0;
+    }
+
     const startingBalanceCents = Math.max(0, debt.currentBalance.getCents());
-    const state: Internal = { balanceCents: startingBalanceCents };
+    const state: Internal = { balanceCents: startOffset === 0 ? startingBalanceCents : 0 };
 
     const computedPayment = this.computeMonthlyPayment(debt, monthlyRate);
     const paymentCents = Math.max(0, computedPayment.getCents());
 
     const points: DebtSchedulePoint[] = [];
     let payoffMonthIndex: number | null = null;
+    let hasOriginated = startOffset === 0;
 
     for (let m = 0; m <= monthsMax; m++) {
-      if (state.balanceCents <= 0 && payoffMonthIndex === null) payoffMonthIndex = m;
+      if (!hasOriginated && m === startOffset) {
+        hasOriginated = true;
+        state.balanceCents = startingBalanceCents;
+      }
 
-      const interestCents = Math.round(state.balanceCents * monthlyRate);
-      const scheduledPaymentCents = state.balanceCents <= 0 ? 0 : Math.min(paymentCents, state.balanceCents + interestCents);
-      const principalCents = Math.max(0, scheduledPaymentCents - interestCents);
+      // IMPORTANT: pre-start months represent a non-existent debt, so do not mark it as "paid off".
+      if (hasOriginated && state.balanceCents <= 0 && payoffMonthIndex === null) payoffMonthIndex = m;
 
-      const endingBalanceCents = Math.max(0, state.balanceCents + interestCents - scheduledPaymentCents);
+      const interestCents = hasOriginated ? Math.round(state.balanceCents * monthlyRate) : 0;
+      const scheduledPaymentCents =
+        !hasOriginated || state.balanceCents <= 0
+          ? 0
+          : Math.min(paymentCents, state.balanceCents + interestCents);
+      const principalCents = hasOriginated ? Math.max(0, scheduledPaymentCents - interestCents) : 0;
+
+      const endingBalanceCents = hasOriginated
+        ? Math.max(0, state.balanceCents + interestCents - scheduledPaymentCents)
+        : 0;
 
       points.push({
         monthIndex: m,
@@ -38,18 +60,40 @@ export class DebtAmortizationManager {
         endingBalance: Money.fromCents(endingBalanceCents),
       });
 
-      state.balanceCents = endingBalanceCents;
+      if (hasOriginated) state.balanceCents = endingBalanceCents;
       if (m === monthsMax) break;
     }
 
     return { points, payoffMonthIndex, computedMonthlyPayment: computedPayment };
   }
 
+  /**
+   * Convenience wrapper that derives the monthly rate from the debt's annual APR.
+   * Safe for UI surfaces that may temporarily contain incomplete/invalid dates.
+   */
+  public computeMonthlyPaymentFromDebt(debt: DebtLoan): Money {
+    const monthlyRate = this.annualToMonthly(debt.annualApr.toDecimal());
+    try {
+      return this.computeMonthlyPayment(debt, monthlyRate);
+    } catch {
+      return Money.zero();
+    }
+  }
+
   public computeMonthlyPayment(debt: DebtLoan, monthlyRate: number): Money {
     if (debt.payoffPlan.kind === "monthlyPayment") return debt.payoffPlan.monthlyPayment;
 
-    const startIso = debt.startDateIso ?? DateMonthMath.currentMonthIso();
-    const months = DateMonthMath.monthsBetweenIso(startIso, debt.payoffPlan.targetPayoffDateIso);
+    const startIso =
+      debt.startDateIso && debt.startDateIso.length > 0 ? debt.startDateIso : DateMonthMath.currentMonthIso();
+    const targetIso = debt.payoffPlan.targetPayoffDateIso;
+    if (!targetIso || targetIso.length === 0) return Money.zero();
+
+    let months: number;
+    try {
+      months = DateMonthMath.monthsBetweenIso(startIso, targetIso);
+    } catch {
+      return Money.zero();
+    }
     const n = Math.max(1, months);
     const pv = Math.max(0, debt.currentBalance.getCents()) / 100;
 

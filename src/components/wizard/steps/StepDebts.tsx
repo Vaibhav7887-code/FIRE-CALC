@@ -33,7 +33,7 @@ export function StepDebts() {
       <WizardCashflowSummaryCard />
       <p className="text-sm text-slate-600">
         Add debts like a mortgage, car loan, or line of credit. You can specify a monthly payment
-        or a target payoff date (we’ll compute the payment later in projections).
+        or a target payoff date (we’ll compute an implied monthly payment).
       </p>
 
       <div className="flex items-center justify-between">
@@ -132,6 +132,7 @@ export function StepDebts() {
                             />
                           )}
                         />
+                        <FutureStartHint startDateIso={debts[idx]?.startDateIso} />
                       </div>
 
                       <div className="space-y-1">
@@ -194,6 +195,7 @@ export function StepDebts() {
                         <FieldErrorText
                           message={errors.debts?.[idx]?.targetPayoffDateIso?.message as any}
                         />
+                        <ImpliedMonthlyPaymentHint amortization={amortization} debt={debts[idx]} />
                       </div>
                     )}
 
@@ -254,11 +256,65 @@ function PaidOffByHint(props: Readonly<{
 
   const schedule = props.amortization.buildSchedule(debtLike as any, 80);
   if (schedule.payoffMonthIndex === null) return null;
-  const payoffIso = DateMonthMath.addMonthsIso(startIso, schedule.payoffMonthIndex);
+  const payoffIso = DateMonthMath.addMonthsIso(DateMonthMath.currentMonthIso(), schedule.payoffMonthIndex);
 
   return (
     <p className="mt-1 text-xs text-slate-600">
       Paid off by: <span className="font-semibold text-slate-900">{payoffIso}</span>
+    </p>
+  );
+}
+
+function ImpliedMonthlyPaymentHint(props: Readonly<{
+  amortization: DebtAmortizationManager;
+  debt: WizardFormInputValues["debts"][number] | undefined;
+}>) {
+  const d = props.debt;
+  if (!d) return null;
+  if (d.payoffPlanKind !== "targetDate") return null;
+
+  const balanceCents = MoneyParser.tryParseCadOrZero(d.currentBalance).getCents();
+  if (balanceCents <= 0) return null;
+  if (!d.targetPayoffDateIso || d.targetPayoffDateIso.length === 0) return null;
+
+  const startIso =
+    d.startDateIso && d.startDateIso.length > 0 ? d.startDateIso : DateMonthMath.currentMonthIso();
+  const debtLike = {
+    id: d.id,
+    name: d.name,
+    currentBalance: Money.fromCents(balanceCents),
+    annualApr: RateBps.fromPercent(d.annualAprPercent),
+    startDateIso: startIso,
+    payoffPlan: { kind: "targetDate", targetPayoffDateIso: d.targetPayoffDateIso },
+  } as const;
+
+  const paymentCents = props.amortization.computeMonthlyPaymentFromDebt(debtLike as any).getCents();
+  if (paymentCents <= 0) return null;
+
+  return (
+    <p className="mt-1 text-xs text-slate-600">
+      Implied monthly payment:{" "}
+      <span className="font-semibold text-slate-900">{Money.fromCents(paymentCents).formatCad()}/mo</span>
+    </p>
+  );
+}
+
+function FutureStartHint(props: Readonly<{ startDateIso: string | undefined }>) {
+  const startIso = props.startDateIso;
+  if (!startIso || startIso.length === 0) return null;
+
+  const nowIso = DateMonthMath.currentMonthIso();
+  let isFuture = false;
+  try {
+    isFuture = DateMonthMath.monthsBetweenIso(nowIso, startIso) > 0;
+  } catch {
+    isFuture = false;
+  }
+  if (!isFuture) return null;
+
+  return (
+    <p className="mt-1 inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-700">
+      Starts <span className="ml-1 font-semibold text-slate-900">{DateMonthMath.formatMonYYYY(startIso)}</span>
     </p>
   );
 }
