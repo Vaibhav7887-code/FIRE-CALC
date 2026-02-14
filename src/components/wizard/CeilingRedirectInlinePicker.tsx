@@ -3,6 +3,7 @@
 import { useEffect, useMemo } from "react";
 import { Controller, useFieldArray, useFormContext, useWatch } from "react-hook-form";
 import { FieldLabel } from "@/components/ui/FieldLabel";
+import { FieldErrorText } from "@/components/ui/FieldErrorText";
 import { WizardFormInputValues } from "@/components/wizard/WizardSchema";
 
 type SourceKind = WizardFormInputValues["redirectRules"][number]["sourceKind"];
@@ -17,7 +18,7 @@ type Props = Readonly<{
 }>;
 
 export function CeilingRedirectInlinePicker(props: Props) {
-  const { control } = useFormContext<WizardFormInputValues>();
+  const { control, getValues } = useFormContext<WizardFormInputValues>();
 
   const redirectRulesArray = useFieldArray({ control, name: "redirectRules", keyName: "_key" });
   const rules = useWatch({ control, name: "redirectRules" }) ?? [];
@@ -27,7 +28,16 @@ export function CeilingRedirectInlinePicker(props: Props) {
   }, [rules, props.sourceKind, props.sourceId]);
 
   useEffect(() => {
-    if (ruleIndex >= 0) return;
+    if (!props.sourceId || props.sourceId.length === 0) return;
+
+    // StrictMode-safe: effects can run twice in dev, so check the current form values
+    // instead of relying only on `useWatch`/`ruleIndex` (which may lag).
+    const currentRules = getValues("redirectRules") ?? [];
+    const exists = currentRules.some(
+      (r: any) => r?.sourceKind === props.sourceKind && r?.sourceId === props.sourceId,
+    );
+    if (exists) return;
+
     redirectRulesArray.append({
       id: WizardIdFactory.create(),
       sourceKind: props.sourceKind,
@@ -35,8 +45,7 @@ export function CeilingRedirectInlinePicker(props: Props) {
       destinationKind: "Unallocated",
       destinationId: undefined,
     } as any);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ruleIndex, props.sourceKind, props.sourceId]);
+  }, [getValues, redirectRulesArray, props.sourceKind, props.sourceId]);
 
   if (ruleIndex < 0) return null;
   return <CeilingRedirectInlinePickerInner ruleIndex={ruleIndex} label={props.label} />;
@@ -45,7 +54,10 @@ export function CeilingRedirectInlinePicker(props: Props) {
 function CeilingRedirectInlinePickerInner(
   props: Readonly<{ ruleIndex: number; label: string }>,
 ) {
-  const { control } = useFormContext<WizardFormInputValues>();
+  const {
+    control,
+    formState: { errors },
+  } = useFormContext<WizardFormInputValues>();
   const investments = useWatch({ control, name: "investments" }) ?? [];
   const goalFunds = useWatch({ control, name: "goalFunds" }) ?? [];
   const debts = useWatch({ control, name: "debts" }) ?? [];
@@ -119,6 +131,12 @@ function CeilingRedirectInlinePickerInner(
                     ))}
                   </select>
                 )}
+              />
+              <FieldErrorText
+                message={
+                  (errors.redirectRules?.[props.ruleIndex]?.destinationId?.message as any) ??
+                  undefined
+                }
               />
             </div>
           )}
