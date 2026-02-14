@@ -13,7 +13,16 @@ export class CeilingRedirectManager {
     rules: ReadonlyArray<CeilingRedirectRule>,
     resolver: RedirectDestinationResolver,
   ): ReadonlyArray<RedirectApplication> {
-    const rule = rules.find((r) => r.sourceKind === event.sourceKind && r.sourceId === event.sourceId);
+    // If duplicate rules exist (e.g. wizard step interactions), prefer the most recently added rule.
+    // This makes rule selection stable without requiring all upstream surfaces to perfectly deduplicate.
+    let rule: CeilingRedirectRule | undefined = undefined;
+    for (let i = rules.length - 1; i >= 0; i--) {
+      const r = rules[i];
+      if (r?.sourceKind === event.sourceKind && r?.sourceId === event.sourceId) {
+        rule = r;
+        break;
+      }
+    }
     if (!rule) {
       return [
         {

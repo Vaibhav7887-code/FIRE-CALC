@@ -90,7 +90,15 @@ export class WizardSessionMapper {
           : { kind: "targetDate", targetPayoffDateIso: d.targetPayoffDateIso ?? "" },
     }));
 
-    const ceilingRedirectRules: CeilingRedirectRule[] = values.redirectRules.map((r) => ({
+    // Defensive: dedupe by (sourceKind, sourceId). Multi-step wizard interactions can produce duplicates.
+    // Keep the *latest* entry as the user-visible winner.
+    const redirectRuleBySource = new Map<string, (typeof values.redirectRules)[number]>();
+    for (const r of values.redirectRules) {
+      const key = `${r.sourceKind}:${r.sourceId}`;
+      if (redirectRuleBySource.has(key)) redirectRuleBySource.delete(key);
+      redirectRuleBySource.set(key, r);
+    }
+    const ceilingRedirectRules: CeilingRedirectRule[] = Array.from(redirectRuleBySource.values()).map((r) => ({
       id: r.id,
       sourceKind: r.sourceKind as any,
       sourceId: r.sourceId,
