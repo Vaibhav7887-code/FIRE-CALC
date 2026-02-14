@@ -14,6 +14,7 @@ import { DateMonthMath } from "@/domain/managers/debts/DateMonthMath";
 import { GoalFundPlanningManager } from "@/domain/managers/goals/GoalFundPlanningManager";
 import { WizardCashflowSummaryCard } from "@/components/wizard/WizardCashflowSummaryCard";
 import { CeilingRedirectInlinePicker } from "@/components/wizard/CeilingRedirectInlinePicker";
+import { useEffect, useMemo } from "react";
 
 export function StepGoalFunds() {
   const {
@@ -22,7 +23,7 @@ export function StepGoalFunds() {
   } = useFormContext<WizardFormInputValues>();
 
   const goalFundsArray = useFieldArray({ control, name: "goalFunds" });
-  const planner = new GoalFundPlanningManager();
+  const planner = useMemo(() => new GoalFundPlanningManager(), []);
 
   return (
     <div className="space-y-4">
@@ -38,6 +39,7 @@ export function StepGoalFunds() {
             goalFundsArray.prepend({
               id: WizardIdFactory.create(),
               name: "Emergency fund",
+              planningMode: "monthlyContribution",
               targetAmount: "0",
               currentBalance: "0",
               expectedAnnualReturnPercent: 3,
@@ -54,6 +56,7 @@ export function StepGoalFunds() {
             goalFundsArray.prepend({
               id: WizardIdFactory.create(),
               name: "Vacation (Japan)",
+              planningMode: "monthlyContribution",
               targetAmount: "0",
               currentBalance: "0",
               expectedAnnualReturnPercent: 0,
@@ -70,6 +73,7 @@ export function StepGoalFunds() {
             goalFundsArray.prepend({
               id: WizardIdFactory.create(),
               name: "Custom goal",
+              planningMode: "monthlyContribution",
               targetAmount: "0",
               currentBalance: "0",
               expectedAnnualReturnPercent: 0,
@@ -118,8 +122,10 @@ function GoalFundCard(props: Readonly<{
   const idx = props.index;
 
   const goalId = useWatch({ control, name: `goalFunds.${idx}.id` });
+  const planningMode = useWatch({ control, name: `goalFunds.${idx}.planningMode` });
   const startDateIso = useWatch({ control, name: `goalFunds.${idx}.startDateIso` });
   const targetDateIso = useWatch({ control, name: `goalFunds.${idx}.targetDateIso` });
+  const monthlyContribution = useWatch({ control, name: `goalFunds.${idx}.monthlyContribution` });
   const currentBalance = useWatch({ control, name: `goalFunds.${idx}.currentBalance` });
   const targetAmount = useWatch({ control, name: `goalFunds.${idx}.targetAmount` });
 
@@ -127,6 +133,38 @@ function GoalFundCard(props: Readonly<{
 
   const currentCents = MoneyParser.tryParseCadOrZero(currentBalance).getCents();
   const targetCents = MoneyParser.tryParseCadOrZero(targetAmount).getCents();
+
+  const mode = planningMode === "targetDate" ? "targetDate" : "monthlyContribution";
+  const isTargetDateMode = mode === "targetDate";
+
+  // Mode-gated, one-way writes: only recompute the derived field.
+  useEffect(() => {
+    if (!isTargetDateMode) return;
+    if (!targetDateIso || targetDateIso.length === 0) return;
+
+    const monthlyCents = props.planner.computeMonthlyContributionCents({
+      currentBalanceCents: currentCents,
+      targetAmountCents: targetCents,
+      startDateIso: startIso,
+      targetDateIso,
+    });
+    const next = (monthlyCents / 100).toFixed(2);
+    if ((monthlyContribution ?? "") === next) return;
+    setValue(`goalFunds.${idx}.monthlyContribution`, next, { shouldDirty: true, shouldTouch: false });
+  }, [currentCents, idx, isTargetDateMode, monthlyContribution, props.planner, setValue, startIso, targetCents, targetDateIso]);
+
+  useEffect(() => {
+    if (isTargetDateMode) return;
+    const monthlyCents = MoneyParser.tryParseCadOrZero(monthlyContribution).getCents();
+    const implied = props.planner.computeTargetDateIso({
+      currentBalanceCents: currentCents,
+      targetAmountCents: targetCents,
+      startDateIso: startIso,
+      monthlyContributionCents: monthlyCents,
+    });
+    if ((targetDateIso || undefined) === implied) return;
+    setValue(`goalFunds.${idx}.targetDateIso`, implied, { shouldDirty: true, shouldTouch: false });
+  }, [currentCents, idx, isTargetDateMode, monthlyContribution, props.planner, setValue, startIso, targetCents, targetDateIso]);
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -150,6 +188,28 @@ function GoalFundCard(props: Readonly<{
             </div>
 
             <div className="space-y-1">
+              <FieldLabel htmlFor={`goalFunds.${idx}.planningMode`}>Planning mode</FieldLabel>
+              <Controller
+                control={control}
+                name={`goalFunds.${idx}.planningMode`}
+                render={({ field }) => (
+                  <select
+                    id={`goalFunds.${idx}.planningMode`}
+                    value={field.value ?? "monthlyContribution"}
+                    onChange={(e) => field.onChange(e.target.value)}
+                    className={[
+                      "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm",
+                      "focus:outline-none focus:ring-2 focus:ring-slate-400",
+                    ].join(" ")}
+                  >
+                    <option value="monthlyContribution">Plan by monthly contribution</option>
+                    <option value="targetDate">Plan by target date</option>
+                  </select>
+                )}
+              />
+            </div>
+
+            <div className="space-y-1">
               <FieldLabel htmlFor={`goalFunds.${idx}.startDateIso`}>Start date (optional)</FieldLabel>
               <Controller
                 control={control}
@@ -165,7 +225,14 @@ function GoalFundCard(props: Readonly<{
             </div>
 
             <div className="space-y-1">
-              <FieldLabel htmlFor={`goalFunds.${idx}.targetDateIso`}>Target date (optional)</FieldLabel>
+              <FieldLabel htmlFor={`goalFunds.${idx}.targetDateIso`}>
+                Target date{" "}
+                {!isTargetDateMode ? (
+                  <span className="ml-2 inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                    Derived
+                  </span>
+                ) : null}
+              </FieldLabel>
               <Controller
                 control={control}
                 name={`goalFunds.${idx}.targetDateIso`}
@@ -174,19 +241,19 @@ function GoalFundCard(props: Readonly<{
                     id={`goalFunds.${idx}.targetDateIso`}
                     value={field.value}
                     onChange={(iso) => {
+                      if (!isTargetDateMode) return;
                       field.onChange(iso);
-                      if (!iso) return;
-                      const monthlyCents = props.planner.computeMonthlyContributionCents({
-                        currentBalanceCents: currentCents,
-                        targetAmountCents: targetCents,
-                        startDateIso: startIso,
-                        targetDateIso: iso,
-                      });
-                      setValue(`goalFunds.${idx}.monthlyContribution`, (monthlyCents / 100).toFixed(2));
                     }}
+                    readOnly={!isTargetDateMode}
                   />
                 )}
               />
+              <FieldErrorText message={props.errors.goalFunds?.[idx]?.targetDateIso?.message as any} />
+              {!isTargetDateMode ? (
+                <p className="text-xs text-slate-500">
+                  Derived from your planning mode. Switch planning mode to edit.
+                </p>
+              ) : null}
             </div>
           </div>
 
@@ -224,7 +291,14 @@ function GoalFundCard(props: Readonly<{
             </div>
 
             <div className="space-y-1 md:col-span-1">
-              <FieldLabel htmlFor={`goalFunds.${idx}.monthlyContribution`}>Monthly contribution</FieldLabel>
+              <FieldLabel htmlFor={`goalFunds.${idx}.monthlyContribution`}>
+                Monthly contribution{" "}
+                {isTargetDateMode ? (
+                  <span className="ml-2 inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                    Derived
+                  </span>
+                ) : null}
+              </FieldLabel>
               <Controller
                 control={control}
                 name={`goalFunds.${idx}.monthlyContribution`}
@@ -234,19 +308,18 @@ function GoalFundCard(props: Readonly<{
                     inputMode="decimal"
                     value={field.value}
                     onChange={(v) => {
+                      if (isTargetDateMode) return;
                       field.onChange(v);
-                      const monthlyCents = MoneyParser.tryParseCadOrZero(v).getCents();
-                      const implied = props.planner.computeTargetDateIso({
-                        currentBalanceCents: currentCents,
-                        targetAmountCents: targetCents,
-                        startDateIso: startIso,
-                        monthlyContributionCents: monthlyCents,
-                      });
-                      setValue(`goalFunds.${idx}.targetDateIso`, implied);
                     }}
+                    readOnly={isTargetDateMode}
                   />
                 )}
               />
+              {isTargetDateMode ? (
+                <p className="text-xs text-slate-500">
+                  Derived from your planning mode. Switch planning mode to edit.
+                </p>
+              ) : null}
             </div>
 
             <div className="space-y-1 md:col-span-1">
@@ -267,12 +340,6 @@ function GoalFundCard(props: Readonly<{
               />
             </div>
           </div>
-
-          {targetDateIso ? (
-            <p className="text-xs text-slate-600">
-              Linked: editing Target date recalculates Monthly contribution, and editing Monthly contribution recalculates Target date.
-            </p>
-          ) : null}
 
           <CeilingRedirectInlinePicker
             sourceKind="GoalFund"

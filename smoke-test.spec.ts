@@ -26,6 +26,12 @@ test.describe('Budgeting App Smoke Test', () => {
       consoleErrors.push(`Page Error: ${error.message}`);
     });
 
+    // Ensure we start from a clean slate (local session data can otherwise affect navigation).
+    await page.addInitScript(() => {
+      window.localStorage.clear();
+      window.sessionStorage.clear();
+    });
+
     await page.goto('http://localhost:3000');
     await page.waitForLoadState('networkidle');
   });
@@ -221,7 +227,7 @@ test.describe('Budgeting App Smoke Test', () => {
     await page.waitForTimeout(500);
 
     // Goals step (step 4) - Test 6
-    console.log('\n=== STEP 6: In Goals, set target amount and date, confirm monthly contribution auto-updates ===');
+    console.log('\n=== STEP 6: In Goals, confirm planning mode derived behavior ===');
     // Wait for goals step to load - look for the add goal buttons
     await expect(page.locator('button:has-text("+ Emergency fund")')).toBeVisible();
     
@@ -232,55 +238,69 @@ test.describe('Budgeting App Smoke Test', () => {
       await page.waitForTimeout(500);
       
       // Find the goal inputs
-      const goalCard = page.locator('[class*="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"]').filter({ hasText: /goal|target/i }).first();
+      const goalCard = page
+        .locator('[class*="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"]')
+        .filter({ hasText: "Planning mode" })
+        .first();
       
       // Set target amount
-      const targetAmountInput = goalCard.locator('input[name*="targetAmount"]').or(goalCard.locator('input[placeholder*="amount"]')).first();
+      const targetAmountInput = goalCard.getByLabel("Target amount").first();
       if (await targetAmountInput.count() > 0) {
-        await targetAmountInput.fill('12000');
+        await targetAmountInput.fill("12000");
         await page.waitForTimeout(300);
-        
-        // Set target date (1 year from now)
-        const targetDateInput = goalCard.locator('input[name*="targetDate"]').or(goalCard.locator('input[type="date"]')).first();
-        if (await targetDateInput.count() > 0) {
-          const futureDate = new Date();
-          futureDate.setFullYear(futureDate.getFullYear() + 1);
-          const dateString = futureDate.toISOString().split('T')[0];
-          await targetDateInput.fill(dateString);
+
+        // Switch to "Plan by target date", then set target date (monthly becomes derived)
+        const planningModeSelect = goalCard.getByLabel("Planning mode").first();
+        if (await planningModeSelect.count() > 0) {
+          await planningModeSelect.selectOption("targetDate");
           await page.waitForTimeout(300);
           
-          // Check if monthly contribution auto-calculated
-          const monthlyContribInput = goalCard.locator('input[name*="monthlyContribution"]').or(goalCard.locator('input[placeholder*="monthly"]')).first();
-          if (await monthlyContribInput.count() > 0) {
-            const monthlyValue = await monthlyContribInput.inputValue();
-            console.log('Monthly contribution calculated:', monthlyValue);
+          const targetDateInput = goalCard.getByLabel(/Target date/).first();
+          if (await targetDateInput.count() > 0) {
+            const futureDate = new Date();
+            futureDate.setFullYear(futureDate.getFullYear() + 1);
+            const dateString = futureDate.toISOString().split("T")[0];
+            await targetDateInput.fill(dateString);
+            await page.waitForTimeout(300);
             
-            if (monthlyValue && monthlyValue !== '0' && monthlyValue !== '') {
-              console.log('✅ Monthly contribution auto-updates');
-              
-              // Now edit monthly and check if target date updates
-              await monthlyContribInput.fill('500');
-              await page.waitForTimeout(300);
-              
-              const newTargetDate = await targetDateInput.inputValue();
-              console.log('Target date after editing monthly:', newTargetDate);
-              
-              if (newTargetDate !== dateString) {
-                console.log('✅ Target date updates when monthly is edited');
+            // Check if monthly contribution auto-calculated
+            const monthlyContribInput = goalCard.getByLabel(/Monthly contribution/).first();
+            if (await monthlyContribInput.count() > 0) {
+              const monthlyValue = await monthlyContribInput.inputValue();
+              console.log("Monthly contribution calculated:", monthlyValue);
+
+              if (monthlyValue && monthlyValue !== "0" && monthlyValue !== "") {
+                console.log("✅ Monthly contribution auto-updates in target-date mode");
+
+                // Switch back to "Plan by monthly contribution", then edit monthly and confirm target date updates
+                await planningModeSelect.selectOption("monthlyContribution");
+                await page.waitForTimeout(300);
+
+                await monthlyContribInput.fill("500");
+                await page.waitForTimeout(300);
+
+                const newTargetDate = await targetDateInput.inputValue();
+                console.log("Target date after editing monthly:", newTargetDate);
+
+                if (newTargetDate !== dateString) {
+                  console.log("✅ Target date updates when monthly is edited (monthly mode)");
+                } else {
+                  console.log("⚠️  Target date did not update");
+                }
               } else {
-                console.log('⚠️  Target date did not update');
+                console.log("⚠️  Monthly contribution not calculated");
               }
             } else {
-              console.log('⚠️  Monthly contribution not calculated');
+              console.log("⚠️  Monthly contribution input not found");
             }
           } else {
-            console.log('⚠️  Monthly contribution input not found');
+            console.log("⚠️  Target date input not found");
           }
         } else {
-          console.log('⚠️  Target date input not found');
+          console.log("⚠️  Planning mode select not found");
         }
       } else {
-        console.log('⚠️  Target amount input not found');
+        console.log("⚠️  Target amount input not found");
       }
     } else {
       console.log('⚠️  Add goal button not found');
@@ -398,8 +418,12 @@ test.describe('Budgeting App Smoke Test', () => {
     // Complete wizard
     console.log('\n=== STEP 8: Complete wizard to dashboard ===');
     const completeButton = page.locator('button:has-text("Create dashboard")');
-    await completeButton.click();
-    await page.waitForTimeout(2000);
+    if (await completeButton.count() > 0) {
+      await completeButton.click();
+      await page.waitForTimeout(2000);
+    } else {
+      console.log('⚠️  "Create dashboard" button not found (may already be on dashboard)');
+    }
     
     // Check we're on dashboard
     await expect(page).toHaveURL(/.*dashboard/);

@@ -83,6 +83,10 @@ export const wizardSchema = z
     z.object({
       id: z.string().trim().min(1, "Missing goal id."),
       name: z.string().trim().min(1, "Required"),
+      planningMode: z
+        .enum(["monthlyContribution", "targetDate"])
+        .optional()
+        .default("monthlyContribution"),
       targetAmount: moneyStringDefaultZero,
       currentBalance: moneyStringDefaultZero,
       expectedAnnualReturnPercent: percentNumber,
@@ -133,6 +137,16 @@ export const wizardSchema = z
           code: z.ZodIssueCode.custom,
           message: "Target payoff date is required.",
           path: ["debts", idx, "targetPayoffDateIso"],
+        });
+      }
+    });
+
+    values.goalFunds.forEach((g, idx) => {
+      if (g.planningMode === "targetDate" && (!g.targetDateIso || g.targetDateIso.length === 0)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Target date is required.",
+          path: ["goalFunds", idx, "targetDateIso"],
         });
       }
     });
