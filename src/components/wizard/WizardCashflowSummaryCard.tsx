@@ -6,16 +6,16 @@ import { WizardFormInputValues } from "@/components/wizard/WizardSchema";
 import { MoneyParser } from "@/domain/adapters/MoneyParser";
 import { Money } from "@/domain/models/Money";
 import { HouseholdTaxEngineManager } from "@/domain/managers/tax/HouseholdTaxEngineManager";
-import { BudgetSessionFactory } from "@/domain/models/BudgetSession";
-import { HouseholdBudgetFactory } from "@/domain/models/HouseholdBudget";
-import { InvestmentBucketFactory } from "@/domain/models/InvestmentBucket";
-import { RateBps } from "@/domain/models/RateBps";
+import { WizardSessionMapper } from "@/domain/adapters/WizardSessionMapper";
+import { WizardDebtPaymentCalculator } from "@/components/wizard/WizardDebtPaymentCalculator";
+import { DateMonthMath } from "@/domain/managers/debts/DateMonthMath";
 
 type Row = Readonly<{ label: string; value: string; emphasis?: boolean }>;
 
 export function WizardCashflowSummaryCard() {
   const { control } = useFormContext<WizardFormInputValues>();
 
+  const wizardValues = useWatch({ control }) as any;
   const members = useWatch({ control, name: "members" }) ?? [];
   const householdAllocatedMonthly = useWatch({ control, name: "householdAllocatedMonthly" });
   const investments = useWatch({ control, name: "investments" }) ?? [];
@@ -25,6 +25,9 @@ export function WizardCashflowSummaryCard() {
   const taxYear = useWatch({ control, name: "locale.taxYear" });
 
   const taxEngine = useMemo(() => new HouseholdTaxEngineManager(), []);
+  const sessionMapper = useMemo(() => new WizardSessionMapper(), []);
+  const debtCalc = useMemo(() => new WizardDebtPaymentCalculator(), []);
+  const upcomingDebts = useMemo(() => debtCalc.upcomingDebts(debts), [debtCalc, debts]);
 
   const grossAnnualCents = members.reduce(
     (sum, m) => sum + MoneyParser.tryParseCadOrZero(m.employmentIncomeAnnual).getCents(),
@@ -32,38 +35,12 @@ export function WizardCashflowSummaryCard() {
   );
   const grossMonthlyCents = Math.round(grossAnnualCents / 12);
 
-  const sessionLike = useMemo(() => {
-    const base = BudgetSessionFactory.createNew();
-    return {
-      ...base,
-      locale: { ...base.locale, taxYear },
-      members: members.map((m) => ({
-        id: m.id,
-        displayName: m.displayName,
-        employmentIncomeAnnual: Money.fromCents(MoneyParser.tryParseCadOrZero(m.employmentIncomeAnnual).getCents()),
-        tfsaRoomEntries: [],
-        rrspContributionRoomAnnual: Money.zero(),
-      })),
-      household: HouseholdBudgetFactory.createWithAllocatedMonthly(
-        Money.fromCents(MoneyParser.tryParseCadOrZero(householdAllocatedMonthly).getCents()),
-      ),
-      investments: investments.map((b) => ({
-        ...InvestmentBucketFactory.createDefault(b.kind as any, b.ownerMemberId),
-        id: b.id,
-        kind: b.kind as any,
-        name: b.name,
-        ownerMemberId: b.ownerMemberId,
-        monthlyContribution: Money.fromCents(MoneyParser.tryParseCadOrZero(b.monthlyContribution).getCents()),
-        isRecurringMonthly: b.isRecurringMonthly,
-        expectedAnnualReturn: RateBps.fromPercent(b.expectedAnnualReturnPercent),
-        startingBalance: Money.zero(),
-        backfillContributions: [],
-        startDateIso: b.startDateIso,
-      })),
-    };
-  }, [members, householdAllocatedMonthly, investments, taxYear]);
+  const previewSession = useMemo(() => {
+    // Use the same mapping that creates the dashboard session to avoid preview drift.
+    return sessionMapper.map({ ...wizardValues, locale: { ...(wizardValues?.locale ?? {}), taxYear } });
+  }, [sessionMapper, taxYear, wizardValues]);
 
-  const tax = useMemo(() => taxEngine.estimate(sessionLike as any), [taxEngine, sessionLike]);
+  const tax = useMemo(() => taxEngine.estimate(previewSession as any), [taxEngine, previewSession]);
   const netMonthlyCents = tax.netIncomeMonthly.getCents();
 
   const householdCents = MoneyParser.tryParseCadOrZero(householdAllocatedMonthly).getCents();
@@ -79,10 +56,7 @@ export function WizardCashflowSummaryCard() {
     (sum, g) => sum + MoneyParser.tryParseCadOrZero(g.monthlyContribution).getCents(),
     0,
   );
-  const debtsMonthlyCents = debts.reduce((sum, d) => {
-    if (d.payoffPlanKind !== "monthlyPayment") return sum;
-    return sum + MoneyParser.tryParseCadOrZero(d.monthlyPayment).getCents();
-  }, 0);
+  const debtsMonthlyCents = debtCalc.sumMonthlyPaymentsCentsThisMonth(debts);
 
   const plannedOutflowCents =
     householdCents + investmentMonthlyCents + templateMonthlyCents + goalsMonthlyCents + debtsMonthlyCents;
@@ -116,6 +90,34 @@ export function WizardCashflowSummaryCard() {
         <p className="mt-2 text-xs font-semibold text-red-700">
           You’re allocating more than your estimated net income.
         </p>
+      ) : null}
+
+      {upcomingDebts.length > 0 ? (
+        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <p className="text-xs font-semibold text-slate-900">Upcoming debts</p>
+          <p className="mt-1 text-xs text-slate-600">
+            These debts start in a future month and contribute <span className="font-semibold text-slate-900">$0</span>{" "}
+            to this month’s outflow.
+          </p>
+          <div className="mt-2 space-y-1">
+            {upcomingDebts.map((d) => (
+              <div key={d.id} className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-900">{d.name}</span>
+                  <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-700">
+                    Starts {DateMonthMath.monthKey(d.startDateIso)}
+                  </span>
+                </div>
+                <span className="text-xs text-slate-700">
+                  Planned:{" "}
+                  <span className="font-semibold text-slate-900">
+                    {Money.fromCents(d.plannedPaymentCents).formatCad()}/mo
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
       ) : null}
     </div>
   );

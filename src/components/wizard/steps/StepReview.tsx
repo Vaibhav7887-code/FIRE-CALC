@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useWatch, useFormContext } from "react-hook-form";
 import { WizardFormInputValues } from "@/components/wizard/WizardSchema";
 import { MoneyParser } from "@/domain/adapters/MoneyParser";
@@ -8,6 +8,7 @@ import { Controller, useFieldArray } from "react-hook-form";
 import { FieldLabel } from "@/components/ui/FieldLabel";
 import { FieldErrorText } from "@/components/ui/FieldErrorText";
 import { WizardCashflowSummaryCard } from "@/components/wizard/WizardCashflowSummaryCard";
+import { WizardDebtPaymentCalculator } from "@/components/wizard/WizardDebtPaymentCalculator";
 
 class TotalsCalculator {
   public static monthlyInvestmentTotalCents(
@@ -30,6 +31,7 @@ export function StepReview() {
   const debts = useWatch({ control, name: "debts" }) ?? [];
 
   const redirectRulesArray = useFieldArray({ control, name: "redirectRules", keyName: "_key" });
+  const debtCalc = useMemo(() => new WizardDebtPaymentCalculator(), []);
 
   const householdGrossAnnualCents = members.reduce(
     (sum, m) => sum + MoneyParser.tryParseCadOrZero(m.employmentIncomeAnnual).getCents(),
@@ -46,10 +48,7 @@ export function StepReview() {
     (sum, g) => sum + MoneyParser.tryParseCadOrZero(g.monthlyContribution).getCents(),
     0,
   );
-  const debtMonthlyCents = debts.reduce((sum, d) => {
-    if (d.payoffPlanKind !== "monthlyPayment") return sum;
-    return sum + MoneyParser.tryParseCadOrZero(d.monthlyPayment).getCents();
-  }, 0);
+  const debtMonthlyCents = debtCalc.sumMonthlyPaymentsCentsThisMonth(debts);
 
   const householdCents = MoneyParser.tryParseCadOrZero(household).getCents();
 
@@ -87,6 +86,8 @@ export function StepReview() {
         control={control}
         redirectRuleFields={redirectRulesArray.fields}
         appendRule={redirectRulesArray.append}
+        replaceRules={redirectRulesArray.replace}
+        members={members}
         goalFunds={goalFunds}
         investments={investments}
         debts={debts}
@@ -110,52 +111,58 @@ function RedirectRulesEditor(props: Readonly<{
   control: any;
   redirectRuleFields: ReadonlyArray<any>;
   appendRule: (value: any) => void;
+  replaceRules: (values: any[]) => void;
+  members: WizardFormInputValues["members"];
   goalFunds: WizardFormInputValues["goalFunds"];
   investments: WizardFormInputValues["investments"];
   debts: WizardFormInputValues["debts"];
 }>) {
   const existingRules = useWatch({ control: props.control, name: "redirectRules" }) ?? [];
+  const ensuredKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    const hasSource = (kind: string, id: string) =>
-      existingRules.some((r: any) => r.sourceKind === kind && r.sourceId === id);
+    // De-dupe by (sourceKind, sourceId) to keep the rules list stable and avoid ambiguous edits.
+    // Keep the last occurrence as the winner to match submission dedupe.
+    const byKey = new Map<string, any>();
+    for (const r of existingRules) {
+      const k = `${r?.sourceKind ?? ""}:${r?.sourceId ?? ""}`;
+      if (byKey.has(k)) byKey.delete(k);
+      byKey.set(k, r);
+    }
+    if (byKey.size !== existingRules.length) {
+      props.replaceRules(Array.from(byKey.values()));
+      return;
+    }
+  }, [existingRules, props.replaceRules]);
 
-    props.goalFunds.forEach((g) => {
-      if (hasSource("GoalFund", g.id)) return;
-      props.appendRule({
-        id: WizardIdFactory.create(),
-        sourceKind: "GoalFund",
-        sourceId: g.id,
-        destinationKind: "Unallocated",
-        destinationId: undefined,
-      } as any);
-    });
+  useEffect(() => {
+    const ensure = (kind: string, id: string) => {
+      const key = `${kind}:${id}`;
+      if (!id || id.length === 0) return;
+      if (ensuredKeysRef.current.has(key)) return;
 
-    props.debts.forEach((d) => {
-      if (hasSource("DebtLoan", d.id)) return;
-      props.appendRule({
-        id: WizardIdFactory.create(),
-        sourceKind: "DebtLoan",
-        sourceId: d.id,
-        destinationKind: "Unallocated",
-        destinationId: undefined,
-      } as any);
-    });
+      const hasSource = existingRules.some((r: any) => r.sourceKind === kind && r.sourceId === id);
+      if (!hasSource) {
+        props.appendRule({
+          id: WizardIdFactory.create(),
+          sourceKind: kind,
+          sourceId: id,
+          destinationKind: "Unallocated",
+          destinationId: undefined,
+        } as any);
+      }
 
+      ensuredKeysRef.current.add(key);
+    };
+
+    props.goalFunds.forEach((g) => ensure("GoalFund", g.id));
+    props.debts.forEach((d) => ensure("DebtLoan", d.id));
     props.investments.forEach((inv) => {
       const isRegistered = inv.kind === "TFSA" || inv.kind === "RRSP";
       if (!isRegistered) return;
-      if (hasSource("RegisteredRoomCeiling", inv.id)) return;
-      props.appendRule({
-        id: WizardIdFactory.create(),
-        sourceKind: "RegisteredRoomCeiling",
-        sourceId: inv.id,
-        destinationKind: "Unallocated",
-        destinationId: undefined,
-      } as any);
+      ensure("RegisteredRoomCeiling", inv.id);
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.goalFunds.length, props.debts.length, props.investments.length, existingRules.length]);
+  }, [existingRules, props.goalFunds, props.debts, props.investments, props.appendRule]);
 
   if (props.redirectRuleFields.length === 0) return null;
 
@@ -170,7 +177,14 @@ function RedirectRulesEditor(props: Readonly<{
         {props.redirectRuleFields.map((r, idx) => {
           const sourceKind = (r as any).sourceKind as WizardFormInputValues["redirectRules"][number]["sourceKind"];
           const sourceId = (r as any).sourceId as string;
-          const sourceLabel = SourceLabelResolver.resolve(sourceKind, sourceId, props.goalFunds, props.debts);
+          const sourceLabel = SourceLabelResolver.resolve(
+            sourceKind,
+            sourceId,
+            props.goalFunds,
+            props.debts,
+            props.investments,
+            props.members,
+          );
 
           return (
             <div key={(r as any)._key ?? (r as any).id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -226,6 +240,10 @@ function RedirectDestinationPicker(props: Readonly<{
   goalFunds: WizardFormInputValues["goalFunds"];
   debts: WizardFormInputValues["debts"];
 }>) {
+  const {
+    formState: { errors },
+  } = useFormContext<WizardFormInputValues>();
+
   const destinationKind = useWatch({
     control: props.control,
     name: `redirectRules.${props.index}.destinationKind`,
@@ -269,7 +287,7 @@ function RedirectDestinationPicker(props: Readonly<{
           </select>
         )}
       />
-      <FieldErrorText message={undefined} />
+      <FieldErrorText message={errors.redirectRules?.[props.index]?.destinationId?.message as any} />
     </div>
   );
 }
@@ -280,10 +298,21 @@ class SourceLabelResolver {
     id: string,
     goals: WizardFormInputValues["goalFunds"],
     debts: WizardFormInputValues["debts"],
+    investments: WizardFormInputValues["investments"],
+    members: WizardFormInputValues["members"],
   ): string {
     if (kind === "GoalFund") return goals.find((g) => g.id === id)?.name ?? "Goal";
     if (kind === "DebtLoan") return debts.find((d) => d.id === id)?.name ?? "Debt";
-    return "Ceiling";
+    const inv = investments.find((i) => i.id === id);
+    if (!inv) return "Ceiling";
+
+    const ownerName = inv.ownerMemberId
+      ? members.find((m) => m.id === inv.ownerMemberId)?.displayName
+      : undefined;
+    const base = inv.kind === "TFSA" || inv.kind === "RRSP" ? inv.kind : "Registered";
+    const named =
+      inv.name && inv.name.trim().length > 0 && inv.name !== inv.kind ? `${base} (${inv.name})` : base;
+    return ownerName ? `${named} (${ownerName}) ceiling` : `${named} ceiling`;
   }
 }
 
