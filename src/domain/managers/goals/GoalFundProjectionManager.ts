@@ -1,6 +1,7 @@
 import { GoalFund } from "@/domain/models/GoalFund";
 import { Money } from "@/domain/models/Money";
 import { GoalFundProjectionPoint, GoalFundProjectionResult } from "@/domain/managers/goals/GoalFundProjectionModels";
+import { DateMonthMath } from "@/domain/managers/debts/DateMonthMath";
 
 type InternalState = {
   balanceCents: number;
@@ -9,12 +10,20 @@ type InternalState = {
 };
 
 export class GoalFundProjectionManager {
-  public project(goal: GoalFund, horizonYears: number): GoalFundProjectionResult {
+  public project(
+    goal: GoalFund,
+    horizonYears: number,
+    opts?: Readonly<{ timelineStartIso?: string }>,
+  ): GoalFundProjectionResult {
     const months = Math.max(0, Math.round(horizonYears * 12));
     const targetCents = Math.max(0, goal.targetAmount.getCents());
 
     const monthlyRate = this.annualToMonthly(goal.expectedAnnualReturn.toDecimal());
     const monthlyContributionCents = Math.max(0, goal.monthlyContribution.getCents());
+
+    const timelineStartIso = opts?.timelineStartIso ?? DateMonthMath.currentMonthIso();
+    const startIso = goal.startDateIso && goal.startDateIso.length > 0 ? goal.startDateIso : timelineStartIso;
+    const startOffset = DateMonthMath.monthsBetweenIso(timelineStartIso, startIso);
 
     const state: InternalState = {
       balanceCents: Math.max(0, goal.currentBalance.getCents()),
@@ -36,6 +45,9 @@ export class GoalFundProjectionManager {
       });
 
       if (m === months) break;
+
+      // Respect start month: no growth or contributions before start.
+      if (m < startOffset) continue;
 
       // Growth.
       state.balanceCents = Math.round(state.balanceCents * (1 + monthlyRate));
