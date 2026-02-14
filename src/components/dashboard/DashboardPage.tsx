@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { SecondaryButton } from "@/components/ui/SecondaryButton";
 import { AllocationSlider } from "@/components/slider/AllocationSlider";
@@ -6,16 +7,20 @@ import { NominalRealLineChart } from "@/components/charts/NominalRealLineChart";
 import { EarningsBarChart } from "@/components/charts/EarningsBarChart";
 import { GoalFundsBalanceChart } from "@/components/charts/GoalFundsBalanceChart";
 import { DebtBalanceChart } from "@/components/charts/DebtBalanceChart";
+import { DebtPayoffImpactPanel } from "@/components/dashboard/DebtPayoffImpactPanel";
+import { GoalRedirectImpactPanel } from "@/components/dashboard/GoalRedirectImpactPanel";
+import { RedirectsAppliedPanel } from "@/components/dashboard/RedirectsAppliedPanel";
 import { useBudgetSessionCoordinator, useBudgetSessionState } from "@/domain/coordinators/BudgetSessionCoordinatorProvider";
 import { BudgetDashboardViewModel } from "@/domain/viewmodels/BudgetDashboardViewModel";
 import { AllocationDeltaApplier } from "@/domain/managers/allocation/AllocationDeltaApplier";
 import { SessionAllocationUpdater } from "@/domain/managers/allocation/SessionAllocationUpdater";
-import { SessionJsonControls } from "@/components/dashboard/SessionJsonControls";
-import { SessionExcelExportButton } from "@/components/dashboard/SessionExcelExportButton";
+import { Money } from "@/domain/models/Money";
+import { DateMonthMath } from "@/domain/managers/debts/DateMonthMath";
 
 export function DashboardPage() {
   const coordinator = useBudgetSessionCoordinator();
   const { currentSession } = useBudgetSessionState();
+  const router = useRouter();
 
   const vm = useMemo(() => new BudgetDashboardViewModel(), []);
   const applier = useMemo(() => new AllocationDeltaApplier(), []);
@@ -49,6 +54,19 @@ export function DashboardPage() {
               {viewData.netIncomeMonthly.formatCad()}/mo
             </span>
           </p>
+          <p className="mt-1 text-xs text-slate-600">
+            Assumptions: tax year <span className="font-semibold text-slate-900">{viewData.assumptions.taxYear}</span> ·
+            inflation{" "}
+            <span className="font-semibold text-slate-900">{viewData.assumptions.assumedInflationPercent}%</span> · horizon{" "}
+            <span className="font-semibold text-slate-900">{viewData.assumptions.projectionHorizonYears}y</span>{" "}
+            <button
+              type="button"
+              className="ml-2 font-semibold text-slate-700 underline underline-offset-2 hover:text-slate-900"
+              onClick={() => router.push("/assumptions")}
+            >
+              Edit
+            </button>
+          </p>
           {viewData.memberNetIncomeMonthly.length > 1 ? (
             <div className="mt-2 flex flex-wrap gap-2">
               {viewData.memberNetIncomeMonthly.map((m) => (
@@ -64,21 +82,7 @@ export function DashboardPage() {
           ) : null}
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2">
-            <SessionExcelExportButton />
-            <SessionJsonControls />
-          </div>
-          <SecondaryButton onClick={() => coordinator.resetToOriginal()}>
-            Reset to entered values
-          </SecondaryButton>
-          <PrimaryButton
-            onClick={() => {
-              coordinator.startNew();
-              window.location.href = "/";
-            }}
-          >
-            Start from scratch
-          </PrimaryButton>
+          <SecondaryButton onClick={() => router.push("/data")}>Data</SecondaryButton>
         </div>
       </div>
 
@@ -88,10 +92,18 @@ export function DashboardPage() {
           <p className="mt-2 text-sm text-slate-600">
             Drag handles to rebalance between adjacent segments (snap: $10).
           </p>
+          <button
+            type="button"
+            onClick={() => router.push("/expenses")}
+            className="mt-2 inline-block text-left text-xs font-semibold text-slate-700 underline underline-offset-2 hover:text-slate-900"
+          >
+            Manage household categories
+          </button>
           {viewData.isOverAllocated ? (
             <p className="mt-2 text-sm font-semibold text-red-700">
-              You’ve allocated more than your estimated net income. Increase income or reduce
-              categories.
+              Shortfall:{" "}
+              <span className="font-bold">{Money.fromCents(viewData.shortfallCents).formatCad()}/mo</span>. Reduce
+              allocations to get back to $0.
             </p>
           ) : null}
           <div className="mt-4">
@@ -106,6 +118,34 @@ export function DashboardPage() {
               }}
             />
           </div>
+          {viewData.upcomingDebts.length > 0 ? (
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-sm font-semibold text-slate-900">Upcoming debts</p>
+              <p className="mt-1 text-xs text-slate-600">
+                These debts start later and contribute <span className="font-semibold text-slate-900">$0</span> this month.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {viewData.upcomingDebts.map((d) => (
+                  <div
+                    key={d.debtId}
+                    className="flex flex-wrap items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs"
+                  >
+                    <span className="inline-block h-2 w-2 rounded-full bg-red-500" />
+                    <span className="font-semibold text-slate-900">{d.name}</span>
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-700">
+                      Starts {DateMonthMath.monthKey(d.startDateIso)}
+                    </span>
+                    <span className="text-slate-600">
+                      $0 this month • Planned{" "}
+                      <span className="font-semibold text-slate-900">
+                        {Money.fromCents(d.plannedPaymentCents).formatCad()}/mo
+                      </span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-lg font-semibold">Charts</h2>
@@ -134,6 +174,30 @@ export function DashboardPage() {
               <GoalFundsBalanceChart series={viewData.goalFundBalanceSeries} />
             )}
           </div>
+          {viewData.goalFundBalanceSeries.some((g) => (g.startOffsetMonths ?? 0) > 0) ? (
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-sm font-semibold text-slate-900">Upcoming goals</p>
+              <p className="mt-1 text-xs text-slate-600">
+                These goals start in a future month and contribute <span className="font-semibold text-slate-900">$0</span>{" "}
+                until they start.
+              </p>
+              <div className="mt-2 space-y-1">
+                {viewData.goalFundBalanceSeries
+                  .filter((g) => (g.startOffsetMonths ?? 0) > 0 && g.startDateIso)
+                  .map((g) => (
+                    <div key={g.fundId} className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-slate-900">{g.name}</span>
+                      <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-700">
+                        Starts {DateMonthMath.monthKey(g.startDateIso!)}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          ) : null}
+          {viewData.goalRedirectImpacts.some((g) => g.redirectTrace.length > 0) ? (
+            <GoalRedirectImpactPanel impacts={viewData.goalRedirectImpacts} />
+          ) : null}
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -148,6 +212,9 @@ export function DashboardPage() {
               <DebtBalanceChart series={viewData.debtBalanceSeries} />
             )}
           </div>
+          {viewData.debtPayoffImpacts.length > 0 ? (
+            <DebtPayoffImpactPanel impacts={viewData.debtPayoffImpacts} />
+          ) : null}
         </div>
       </div>
 
@@ -160,6 +227,8 @@ export function DashboardPage() {
           <EarningsBarChart data={viewData.earningsDecomposition} />
         </div>
       </div>
+
+      <RedirectsAppliedPanel entries={viewData.redirectsAppliedTrace} />
     </main>
   );
 }

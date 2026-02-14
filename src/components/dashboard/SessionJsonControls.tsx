@@ -20,7 +20,9 @@ export function SessionJsonControls() {
     const json = serializer.snapshotToJson(snapshot);
 
     try {
-      await navigator.clipboard.writeText(json);
+      // Don't `await`: browsers can treat awaited async work as losing the
+      // user-activation required to start a file download.
+      void navigator.clipboard.writeText(json);
     } catch {
       // Clipboard can fail depending on context; fall back to download.
     }
@@ -30,8 +32,11 @@ export function SessionJsonControls() {
     const a = document.createElement("a");
     a.href = url;
     a.download = "budgeting-session.json";
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    a.remove();
+    // Give the browser a tick to start the download before revoking.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   };
 
   const onImportFile = async (file: File) => {
